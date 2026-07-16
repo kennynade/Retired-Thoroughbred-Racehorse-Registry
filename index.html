@@ -307,6 +307,37 @@
       white-space: nowrap;
     }
 
+    .pill.gs,
+    .achievement-text.gs {
+      background: #fde8e8;
+      color: #a12d2d;
+    }
+
+    .pill.g1,
+    .achievement-text.g1 {
+      background: #e4efff;
+      color: #1f5fbf;
+    }
+
+    .achievement-options {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .achievement-options .checkbox-line {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 9px 10px;
+      background: var(--white);
+    }
+
+    .achievement-text {
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-weight: 700;
+    }
+
     .missing {
       color: var(--warn);
       font-weight: 700;
@@ -552,6 +583,19 @@
             </select>
           </label>
 
+          <label class="full">Achievements
+            <div class="achievement-options">
+              <span class="checkbox-line">
+                <input id="gsWinner" type="checkbox">
+                <span class="achievement-text gs">GS winner</span>
+              </span>
+              <span class="checkbox-line">
+                <input id="g1Winner" type="checkbox">
+                <span class="achievement-text g1">G1 winner</span>
+              </span>
+            </div>
+          </label>
+
           <label>Farm / death location country / region
             <input id="farmCountry" maxlength="100" placeholder="e.g. Japan">
           </label>
@@ -708,6 +752,14 @@
           </select>
         </label>
 
+        <label>Achievement
+          <select id="filterAchievement">
+            <option value="all">All</option>
+            <option value="gs">GS winner</option>
+            <option value="g1">G1 winner</option>
+          </select>
+        </label>
+
         <label>Deceased
           <select id="filterDead">
             <option value="all">All</option>
@@ -739,7 +791,7 @@
     const adminPasscode = "kenny1515";
     const currentYear = new Date().getFullYear();
     const fields = [
-      "name", "birthYear", "nationality", "photos", "photoCredits", "sex", "color", "farmCountry", "farmRegion",
+      "name", "birthYear", "nationality", "photos", "photoCredits", "sex", "color", "gsWinner", "g1Winner", "farmCountry", "farmRegion",
       "farmName", "breeding", "currentWork", "healthy", "diseaseDate", "diseaseName",
       "dead", "deathDate", "deathReason", "ownerCountry", "ownerName", "editorIp"
     ];
@@ -752,6 +804,8 @@
       photoCredits: "Photo credit / source",
       sex: "Sex",
       color: "Color",
+      gsWinner: "GS winner",
+      g1Winner: "G1 winner",
       farmCountry: "Farm / death location country / region",
       farmRegion: "Farm / death location area",
       farmName: "Post-retirement farm / death location",
@@ -796,6 +850,8 @@
     const banList = document.querySelector("#banList");
     const healthyInput = document.querySelector("#healthy");
     const deadInput = document.querySelector("#dead");
+    const gsWinnerInput = document.querySelector("#gsWinner");
+    const g1WinnerInput = document.querySelector("#g1Winner");
     const diseaseDateLabel = document.querySelector("#diseaseDateLabel");
     const diseaseNameLabel = document.querySelector("#diseaseNameLabel");
     const deathDateLabel = document.querySelector("#deathDateLabel");
@@ -945,6 +1001,7 @@
     function textValue(id) {
       if (id === "photos") return currentPhotos;
       if (id === "photoCredits") return currentPhotoCredits;
+      if (id === "gsWinner" || id === "g1Winner") return document.querySelector(`#${id}`).checked;
       return document.querySelector(`#${id}`).value.trim();
     }
 
@@ -1083,6 +1140,11 @@
       }
     }
 
+    function syncAchievementFields() {
+      if (g1WinnerInput.checked) gsWinnerInput.checked = true;
+      if (!gsWinnerInput.checked) g1WinnerInput.checked = false;
+    }
+
     function missingFields(record) {
       const required = [
         "name", "birthYear", "nationality", "sex", "color", "farmCountry", "farmRegion",
@@ -1137,10 +1199,26 @@
       return keys.map((key) => `<span class="pill missing">${labels[key]}</span>`).join("");
     }
 
+    function hasGsWinner(record) {
+      return Boolean(record.gsWinner || record.g1Winner);
+    }
+
+    function hasG1Winner(record) {
+      return Boolean(record.g1Winner);
+    }
+
+    function renderAchievements(record) {
+      const badges = [];
+      if (hasG1Winner(record)) badges.push('<span class="pill g1">G1 winner</span>');
+      if (hasGsWinner(record)) badges.push('<span class="pill gs">GS winner</span>');
+      return badges.join("");
+    }
+
     function getFilteredRecords() {
       const missingMode = document.querySelector("#filterMissing").value;
       const sex = document.querySelector("#filterSex").value;
       const breeding = document.querySelector("#filterBreeding").value;
+      const achievement = document.querySelector("#filterAchievement").value;
       const dead = document.querySelector("#filterDead").value;
       const search = textValue("search").toLowerCase();
 
@@ -1155,6 +1233,7 @@
         return (missingMode === "all" || (missingMode === "missing" && missing.length) || (missingMode === "complete" && !missing.length))
           && (sex === "all" || record.sex === sex)
           && (breeding === "all" || record.breeding === breeding)
+          && (achievement === "all" || (achievement === "gs" && hasGsWinner(record)) || (achievement === "g1" && hasG1Winner(record)))
           && (dead === "all" || record.dead === dead)
           && (!showReportedOnly || reportCount > 0)
           && (!search || haystack.includes(search));
@@ -1230,6 +1309,7 @@
                     <span class="pill">${display(record.color)}</span>
                     <span class="pill">${display(record.nationality)}</span>
                     <span class="pill">${display(calculateAge(record.birthYear))} years</span>
+                    ${renderAchievements(record)}
                   </td>
                   <td>${display(record.farmCountry)} / ${display(record.farmRegion)}<br>${display(record.farmName)}</td>
                   <td>Breeding: ${display(record.breeding)}<br>Current work: ${display(record.currentWork, "None")}<br>Healthy: ${display(record.healthy)}</td>
@@ -1398,11 +1478,16 @@
       editState.textContent = "New record";
       updateAge();
       syncConditionalFields();
+      syncAchievementFields();
     }
 
     function fillForm(record) {
       fields.forEach((field) => {
         if (field === "photos" || field === "photoCredits" || field === "editorIp") return;
+        if (field === "gsWinner" || field === "g1Winner") {
+          document.querySelector(`#${field}`).checked = Boolean(record[field]);
+          return;
+        }
         document.querySelector(`#${field}`).value = record[field] || "";
       });
       editingId = record.id;
@@ -1412,6 +1497,7 @@
       editState.textContent = "Editing record";
       updateAge();
       syncConditionalFields();
+      syncAchievementFields();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1465,6 +1551,8 @@
 
     healthyInput.addEventListener("change", syncConditionalFields);
     deadInput.addEventListener("change", syncConditionalFields);
+    gsWinnerInput.addEventListener("change", syncAchievementFields);
+    g1WinnerInput.addEventListener("change", syncAchievementFields);
 
     missingSpotlightList.addEventListener("click", (event) => {
       const editId = event.target.closest("[data-edit-missing]")?.dataset.editMissing;
@@ -1641,6 +1729,7 @@
       event.preventDefault();
       const record = Object.fromEntries(fields.map((field) => [field, textValue(field)]));
       record.id = editingId || crypto.randomUUID();
+      if (record.g1Winner) record.gsWinner = true;
 
       const missingPhotoSourceIndex = record.photos.findIndex((_, index) => !String(record.photoCredits[index] || "").trim());
       if (missingPhotoSourceIndex !== -1) {
@@ -1866,6 +1955,7 @@
     });
 
     syncConditionalFields();
+    syncAchievementFields();
     render();
   </script>
 </body>
