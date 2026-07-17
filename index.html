@@ -196,6 +196,25 @@
       display: none;
     }
 
+    .native-file-input {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .file-picker-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .file-picker-name {
+      color: var(--ink);
+    }
+
     .actions {
       display: flex;
       gap: 10px;
@@ -556,7 +575,11 @@
           </label>
 
           <label class="full">Horse photo
-            <input id="photoUpload" type="file" accept="image/*" multiple>
+            <input class="native-file-input" id="photoUpload" type="file" accept="image/*" multiple>
+            <span class="file-picker-row">
+              <button class="secondary" type="button" id="photoUploadButton">Choose files</button>
+              <span class="file-picker-name" id="photoUploadText">No files selected</span>
+            </span>
             <div class="photo-preview-grid" id="photoPreview"></div>
           </label>
 
@@ -632,7 +655,7 @@
           </label>
 
           <label id="diseaseDateLabel">Disease date
-            <input id="diseaseDate" type="date">
+            <input id="diseaseDate" maxlength="10" inputmode="numeric" placeholder="YYYY/MM/DD">
           </label>
 
           <label id="diseaseNameLabel">Disease name
@@ -649,7 +672,7 @@
           </label>
 
           <label id="deathDateLabel">Death date
-            <input id="deathDate" type="date">
+            <input id="deathDate" maxlength="10" inputmode="numeric" placeholder="YYYY/MM/DD">
           </label>
 
           <label class="full" id="deathReasonLabel">Cause of death
@@ -789,6 +812,9 @@
     const editorIpStorageKey = "retired-racehorse-editor-ip-v1";
     const adminSessionKey = "retired-racehorse-admin-v1";
     const adminPasscode = "kenny1515";
+    const supabaseUrl = "https://quteydkjuqqmwaevqyit.supabase.co";
+    const supabaseKey = "sb_publishable_ab-KRqgSc74G03ZBNvYqKw_n676PCZ5";
+    const photoBucket = "horse-photos";
     const currentYear = new Date().getFullYear();
     const fields = [
       "name", "birthYear", "nationality", "photos", "photoCredits", "sex", "color", "gsWinner", "g1Winner", "farmCountry", "farmRegion",
@@ -831,6 +857,8 @@
     const birthYearInput = document.querySelector("#birthYear");
     const ageInput = document.querySelector("#age");
     const photoUpload = document.querySelector("#photoUpload");
+    const photoUploadButton = document.querySelector("#photoUploadButton");
+    const photoUploadText = document.querySelector("#photoUploadText");
     const photoPreview = document.querySelector("#photoPreview");
     const tableWrap = document.querySelector("#tableWrap");
     const summary = document.querySelector("#summary");
@@ -856,10 +884,10 @@
     const diseaseNameLabel = document.querySelector("#diseaseNameLabel");
     const deathDateLabel = document.querySelector("#deathDateLabel");
     const deathReasonLabel = document.querySelector("#deathReasonLabel");
-    let records = loadRecords();
-    let historyEntries = loadHistory();
-    let reports = loadReports();
-    let bans = loadBans();
+    let records = [];
+    let historyEntries = [];
+    let reports = [];
+    let bans = [];
     let editingId = null;
     let expandedHistoryId = null;
     let currentPhotos = [];
@@ -871,8 +899,97 @@
     let showReportedOnly = false;
     let isAdmin = sessionStorage.getItem(adminSessionKey) === "true";
 
-    backfillHistoryForExistingRecords();
-    normalizeHistoryEntries();
+    initializeApp();
+
+    async function supabaseRequest(path, options = {}) {
+      const response = await fetch(`${supabaseUrl}${path}`, {
+        method: options.method || "GET",
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          ...(options.body instanceof Blob ? {} : { "Content-Type": "application/json" }),
+          ...(options.headers || {})
+        },
+        body: options.body instanceof Blob ? options.body : options.body ? JSON.stringify(options.body) : undefined
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Supabase request failed: ${response.status}`);
+      }
+
+      if (response.status === 204) return null;
+      const text = await response.text();
+      return text ? JSON.parse(text) : null;
+    }
+
+    function mapHorseRow(row) {
+      return { ...(row.data || {}), id: row.id };
+    }
+
+    function mapHistoryRow(row) {
+      return {
+        id: row.id,
+        recordId: row.horse_id,
+        action: row.action,
+        horseName: row.horse_name,
+        timestamp: row.created_at,
+        details: row.details,
+        adminDetails: row.admin_details
+      };
+    }
+
+    function mapReportRow(row) {
+      return {
+        id: row.id,
+        recordId: row.horse_id,
+        reason: row.reason,
+        reporterIp: row.reporter_ip,
+        status: row.status,
+        reply: row.reply,
+        resolvedByIp: row.resolved_by_ip,
+        timestamp: row.created_at,
+        resolvedAt: row.resolved_at
+      };
+    }
+
+    function mapBanRow(row) {
+      return {
+        id: row.id,
+        ip: row.ip,
+        reason: row.reason,
+        bannedByIp: row.banned_by_ip,
+        unbannedByIp: row.unbanned_by_ip,
+        status: row.status,
+        timestamp: row.created_at,
+        liftedAt: row.lifted_at
+      };
+    }
+
+    async function initializeApp() {
+      tableWrap.innerHTML = '<div class="empty">Loading registry data...</div>';
+      try {
+        await loadCloudData();
+        render();
+      } catch (error) {
+        console.error(error);
+        tableWrap.innerHTML = '<div class="empty">Could not load Supabase data. Please check the project URL, key, and table policies.</div>';
+      }
+    }
+
+    async function loadCloudData() {
+      const [horseRows, historyRows, reportRows, banRows] = await Promise.all([
+        supabaseRequest("/rest/v1/horses?select=*&order=updated_at.desc"),
+        supabaseRequest("/rest/v1/horse_history?select=*&order=created_at.desc"),
+        supabaseRequest("/rest/v1/reports?select=*&order=created_at.desc"),
+        supabaseRequest("/rest/v1/bans?select=*&order=created_at.desc")
+      ]);
+
+      records = (horseRows || []).map(mapHorseRow);
+      historyEntries = (historyRows || []).map(mapHistoryRow);
+      reports = (reportRows || []).map(mapReportRow);
+      bans = (banRows || []).map(mapBanRow);
+    }
 
     function loadRecords() {
       try {
@@ -922,36 +1039,46 @@
       localStorage.setItem(banStorageKey, JSON.stringify(bans));
     }
 
-    function addBan(ip, reason, actorIp) {
-      bans.unshift({
-        id: crypto.randomUUID(),
-        ip,
-        reason,
-        bannedByIp: actorIp,
-        timestamp: new Date().toISOString(),
-        status: "active"
+    async function addBan(ip, reason, actorIp) {
+      const [row] = await supabaseRequest("/rest/v1/bans", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: {
+          ip,
+          reason,
+          banned_by_ip: actorIp,
+          status: "active"
+        }
       });
-      bans = bans.slice(0, 200);
-      saveBans();
+      bans.unshift(mapBanRow(row));
     }
 
-    function unbanIp(banId, actorIp) {
-      bans = bans.map((ban) => ban.id === banId ? { ...ban, status: "lifted", liftedAt: new Date().toISOString(), unbannedByIp: actorIp } : ban);
-      saveBans();
+    async function unbanIp(banId, actorIp) {
+      const [row] = await supabaseRequest(`/rest/v1/bans?id=eq.${banId}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: {
+          status: "lifted",
+          lifted_at: new Date().toISOString(),
+          unbanned_by_ip: actorIp
+        }
+      });
+      bans = bans.map((ban) => ban.id === banId ? mapBanRow(row) : ban);
     }
 
-    function addHistory(action, record, customDetails = null, adminDetails = "") {
-      historyEntries.unshift({
-        id: crypto.randomUUID(),
-        recordId: record.id,
-        action,
-        horseName: record.name || "Unnamed horse",
-        timestamp: new Date().toISOString(),
-        details: customDetails || `${displayPlain(record.nationality)} · ${displayPlain(record.farmName)} · ${displayPlain(record.ownerName)} · Editor IP: ${displayPlain(record.editorIp)} · Photos: ${getRecordPhotos(record).length} · Photo sources: ${formatPhotoSources(record)}`,
-        adminDetails
+    async function addHistory(action, record, customDetails = null, adminDetails = "") {
+      const [row] = await supabaseRequest("/rest/v1/horse_history", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: {
+          horse_id: record.id,
+          action,
+          horse_name: record.name || "Unnamed horse",
+          details: customDetails || `${displayPlain(record.nationality)} · ${displayPlain(record.farmName)} · ${displayPlain(record.ownerName)} · Editor IP: ${displayPlain(record.editorIp)} · Photos: ${getRecordPhotos(record).length} · Photo sources: ${formatPhotoSources(record)}`,
+          admin_details: adminDetails
+        }
       });
-      historyEntries = historyEntries.slice(0, 100);
-      saveHistory();
+      historyEntries.unshift(mapHistoryRow(row));
     }
 
     function backfillHistoryForExistingRecords() {
@@ -998,10 +1125,27 @@
       return credits.map((credit, index) => `Photo ${index + 1}: ${displayPlain(credit)}`).join("; ");
     }
 
+    function formatDateValue(value) {
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const normalized = text.replace(/[.-]/g, "/");
+      const match = normalized.match(/^(\d{4})\/?(\d{1,2})\/?(\d{1,2})$/);
+      if (!match) return normalized;
+      return `${match[1]}/${match[2].padStart(2, "0")}/${match[3].padStart(2, "0")}`;
+    }
+
+    function normalizeDateFields() {
+      ["diseaseDate", "deathDate"].forEach((id) => {
+        const input = document.querySelector(`#${id}`);
+        input.value = formatDateValue(input.value);
+      });
+    }
+
     function textValue(id) {
       if (id === "photos") return currentPhotos;
       if (id === "photoCredits") return currentPhotoCredits;
       if (id === "gsWinner" || id === "g1Winner") return document.querySelector(`#${id}`).checked;
+      if (id === "diseaseDate" || id === "deathDate") return formatDateValue(document.querySelector(`#${id}`).value);
       return document.querySelector(`#${id}`).value.trim();
     }
 
@@ -1171,12 +1315,12 @@
       if (!record.diseaseDate && !record.diseaseName) return "None";
       if (isDeadValue(record.healthy) || isYes(record.dead)) return "None";
       if (isYes(record.healthy)) return "None";
-      return `${display(record.diseaseDate)}<br>${display(record.diseaseName)}`;
+      return `${display(formatDateValue(record.diseaseDate))}<br>${display(record.diseaseName)}`;
     }
 
     function renderDeathInfo(record) {
       if (!shouldShowDeathFields(record.dead)) return "None";
-      return `${display(record.deathDate)}<br>${display(record.deathReason)}`;
+      return `${display(formatDateValue(record.deathDate))}<br>${display(record.deathReason)}`;
     }
 
     function display(value, fallback = "—") {
@@ -1249,24 +1393,33 @@
       return reports.filter((report) => report.recordId === recordId && report.status !== "resolved");
     }
 
-    function addReport(recordId, reason, reporterIp) {
-      reports.unshift({
-        id: crypto.randomUUID(),
-        recordId,
-        reason,
-        reporterIp,
-        status: "open",
-        timestamp: new Date().toISOString()
+    async function addReport(recordId, reason, reporterIp) {
+      const [row] = await supabaseRequest("/rest/v1/reports", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: {
+          horse_id: recordId,
+          reason,
+          reporter_ip: reporterIp,
+          status: "open"
+        }
       });
-      reports = reports.slice(0, 200);
-      saveReports();
+      reports.unshift(mapReportRow(row));
     }
 
-    function resolveReports(recordId, reply, adminIp) {
-      reports = reports.map((report) => report.recordId === recordId && report.status !== "resolved"
-        ? { ...report, status: "resolved", reply, resolvedAt: new Date().toISOString(), resolvedByIp: adminIp }
-        : report);
-      saveReports();
+    async function resolveReports(recordId, reply, adminIp) {
+      const rows = await supabaseRequest(`/rest/v1/reports?horse_id=eq.${recordId}&status=neq.resolved`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: {
+          status: "resolved",
+          reply,
+          resolved_at: new Date().toISOString(),
+          resolved_by_ip: adminIp
+        }
+      });
+      const updated = new Map((rows || []).map((row) => [row.id, mapReportRow(row)]));
+      reports = reports.map((report) => updated.get(report.id) || report);
     }
 
     function render() {
@@ -1469,6 +1622,7 @@
       editingId = null;
       currentPhotos = [];
       currentPhotoCredits = [];
+      photoUploadText.textContent = "No files selected";
       renderPhotoPreview();
       if (editorIpConsent.checked) {
         detectEditorIp();
@@ -1488,11 +1642,14 @@
           document.querySelector(`#${field}`).checked = Boolean(record[field]);
           return;
         }
-        document.querySelector(`#${field}`).value = record[field] || "";
+        document.querySelector(`#${field}`).value = (field === "diseaseDate" || field === "deathDate")
+          ? formatDateValue(record[field])
+          : record[field] || "";
       });
       editingId = record.id;
       currentPhotos = getRecordPhotos(record);
       currentPhotoCredits = getRecordPhotoCredits(record, currentPhotos.length);
+      photoUploadText.textContent = "No files selected";
       renderPhotoPreview();
       editState.textContent = "Editing record";
       updateAge();
@@ -1586,14 +1743,22 @@
       }
     });
 
+    photoUploadButton.addEventListener("click", () => photoUpload.click());
+
+    ["diseaseDate", "deathDate"].forEach((id) => {
+      document.querySelector(`#${id}`).addEventListener("blur", normalizeDateFields);
+    });
+
     photoUpload.addEventListener("change", async () => {
       const files = Array.from(photoUpload.files);
       if (!files.length) return;
+      photoUploadText.textContent = `${files.length} file${files.length === 1 ? "" : "s"} selected`;
 
       const resizedPhotos = await Promise.all(files.map((file) => resizeImage(file)));
       currentPhotos = [...currentPhotos, ...resizedPhotos];
       currentPhotoCredits = [...currentPhotoCredits, ...resizedPhotos.map(() => "")];
       photoUpload.value = "";
+      photoUploadText.textContent = "No files selected";
       renderPhotoPreview();
     });
 
@@ -1633,6 +1798,55 @@
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
+    }
+
+    function dataUrlToBlob(dataUrl) {
+      const [header, base64] = dataUrl.split(",");
+      const mime = header.match(/:(.*?);/)?.[1] || "image/jpeg";
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new Blob([bytes], { type: mime });
+    }
+
+    async function uploadPhoto(recordId, dataUrl) {
+      if (!String(dataUrl).startsWith("data:")) return dataUrl;
+
+      const blob = dataUrlToBlob(dataUrl);
+      const path = `${recordId}/${crypto.randomUUID()}.jpg`;
+      await supabaseRequest(`/storage/v1/object/${photoBucket}/${path}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": blob.type,
+          "x-upsert": "false"
+        },
+        body: blob
+      });
+      return `${supabaseUrl}/storage/v1/object/public/${photoBucket}/${path}`;
+    }
+
+    async function prepareRecordForSave(record) {
+      const photos = [];
+      for (const photo of record.photos) {
+        photos.push(await uploadPhoto(record.id, photo));
+      }
+      return { ...record, photos };
+    }
+
+    async function saveRecordToCloud(record, isEditing) {
+      const endpoint = isEditing ? `/rest/v1/horses?id=eq.${record.id}` : "/rest/v1/horses";
+      const method = isEditing ? "PATCH" : "POST";
+      const body = isEditing
+        ? { data: record, updated_at: new Date().toISOString() }
+        : { id: record.id, data: record };
+      const [row] = await supabaseRequest(endpoint, {
+        method,
+        headers: { Prefer: "return=representation" },
+        body
+      });
+      return mapHorseRow(row);
     }
 
     function openPhotoPage(record, index) {
@@ -1725,9 +1939,10 @@
       page.document.close();
     }
 
-    form.addEventListener("submit", (event) => {
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const record = Object.fromEntries(fields.map((field) => [field, textValue(field)]));
+      normalizeDateFields();
+      let record = Object.fromEntries(fields.map((field) => [field, textValue(field)]));
       record.id = editingId || crypto.randomUUID();
       if (record.g1Winner) record.gsWinner = true;
 
@@ -1746,17 +1961,30 @@
 
       saveEditorIp(record.editorIp);
 
-      if (editingId) {
-        records = records.map((item) => item.id === editingId ? record : item);
-        addHistory("Edited", record);
-      } else {
-        records.unshift(record);
-        addHistory("Created", record);
-      }
+      saveRecord.disabled = true;
+      saveRecord.textContent = "Saving...";
 
-      saveRecords();
-      resetForm();
-      render();
+      try {
+        record = await prepareRecordForSave(record);
+        const savedRecord = await saveRecordToCloud(record, Boolean(editingId));
+
+        if (editingId) {
+          records = records.map((item) => item.id === editingId ? savedRecord : item);
+          await addHistory("Edited", savedRecord);
+        } else {
+          records.unshift(savedRecord);
+          await addHistory("Created", savedRecord);
+        }
+
+        resetForm();
+        render();
+      } catch (error) {
+        console.error(error);
+        alert("Could not save to Supabase. Please check the database and storage policies.");
+      } finally {
+        saveRecord.textContent = "Save record";
+        if (editorIpAllowed) saveRecord.disabled = false;
+      }
     });
 
     document.querySelector("#resetForm").addEventListener("click", resetForm);
@@ -1801,7 +2029,7 @@
       control.addEventListener("input", render);
     });
 
-    banIpButton.addEventListener("click", () => {
+    banIpButton.addEventListener("click", async () => {
       if (!isAdmin) return;
       if (!adminIpAllowed || !adminActionIp.value.trim()) {
         alert("Admin IP must be shown before using Ban.");
@@ -1815,10 +2043,15 @@
         return;
       }
 
-      addBan(ip.slice(0, 100), reason.slice(0, 100), adminActionIp.value.trim());
-      banIp.value = "";
-      banReason.value = "";
-      render();
+      try {
+        await addBan(ip.slice(0, 100), reason.slice(0, 100), adminActionIp.value.trim());
+        banIp.value = "";
+        banReason.value = "";
+        render();
+      } catch (error) {
+        console.error(error);
+        alert("Could not save this ban to Supabase.");
+      }
     });
 
     tableWrap.addEventListener("click", async (event) => {
@@ -1864,7 +2097,7 @@
             alert("Could not get your IP address. Report submission is disabled until IP detection succeeds.");
             return;
           }
-          addReport(reportId, reason.trim().slice(0, 100), reporterIp);
+          await addReport(reportId, reason.trim().slice(0, 100), reporterIp);
           alert("Report submitted. Thank you.");
           render();
         }
@@ -1895,8 +2128,8 @@
         const reporterIpText = openReports.map((report, index) => `Reporter ${index + 1} IP: ${displayPlain(report.reporterIp)}`).join(" | ");
         const adminIp = adminActionIp.value.trim();
 
-        resolveReports(resolveReportsId, clippedReply, adminIp);
-        addHistory(
+        await resolveReports(resolveReportsId, clippedReply, adminIp);
+        await addHistory(
           "Report resolved",
           record,
           `${reportText} · Admin reply: ${clippedReply}`,
@@ -1911,8 +2144,8 @@
           return;
         }
         if (confirm("Delete this history entry?")) {
+          await supabaseRequest(`/rest/v1/horse_history?id=eq.${deleteHistoryId}`, { method: "DELETE" });
           historyEntries = historyEntries.filter((entry) => entry.id !== deleteHistoryId);
-          saveHistory();
           render();
         }
       }
@@ -1923,13 +2156,10 @@
       }
 
       if (deleteId && confirm("Delete this record?")) {
-        const deletedRecord = records.find((item) => item.id === deleteId);
+        await supabaseRequest(`/rest/v1/horses?id=eq.${deleteId}`, { method: "DELETE" });
         records = records.filter((item) => item.id !== deleteId);
         reports = reports.filter((report) => report.recordId !== deleteId);
-        saveReports();
         if (expandedHistoryId === deleteId) expandedHistoryId = null;
-        if (deletedRecord) addHistory("Deleted", deletedRecord);
-        saveRecords();
         render();
       }
     });
@@ -1940,7 +2170,7 @@
       render();
     });
 
-    banList.addEventListener("click", (event) => {
+    banList.addEventListener("click", async (event) => {
       const banId = event.target.dataset.unban;
       if (!banId || !isAdmin) return;
       if (!adminIpAllowed || !adminActionIp.value.trim()) {
@@ -1949,7 +2179,7 @@
       }
 
       if (confirm("Unban this IP?")) {
-        unbanIp(banId, adminActionIp.value.trim());
+        await unbanIp(banId, adminActionIp.value.trim());
         render();
       }
     });
