@@ -989,6 +989,19 @@
       historyEntries = (historyRows || []).map(mapHistoryRow);
       reports = (reportRows || []).map(mapReportRow);
       bans = (banRows || []).map(mapBanRow);
+      mergeLocalData();
+    }
+
+    function mergeById(cloudItems, localItems) {
+      const cloudIds = new Set(cloudItems.map((item) => item.id));
+      return [...cloudItems, ...localItems.filter((item) => item?.id && !cloudIds.has(item.id))];
+    }
+
+    function mergeLocalData() {
+      records = mergeById(records, loadRecords());
+      historyEntries = mergeById(historyEntries, loadHistory());
+      reports = mergeById(reports, loadReports());
+      bans = mergeById(bans, loadBans());
     }
 
     function loadRecords() {
@@ -1836,16 +1849,25 @@
     }
 
     async function saveRecordToCloud(record, isEditing) {
-      const endpoint = isEditing ? `/rest/v1/horses?id=eq.${record.id}` : "/rest/v1/horses";
-      const method = isEditing ? "PATCH" : "POST";
-      const body = isEditing
-        ? { data: record, updated_at: new Date().toISOString() }
-        : { id: record.id, data: record };
-      const [row] = await supabaseRequest(endpoint, {
-        method,
-        headers: { Prefer: "return=representation" },
-        body
-      });
+      let row = null;
+      if (isEditing) {
+        const rows = await supabaseRequest(`/rest/v1/horses?id=eq.${record.id}`, {
+          method: "PATCH",
+          headers: { Prefer: "return=representation" },
+          body: { data: record, updated_at: new Date().toISOString() }
+        });
+        row = rows?.[0] || null;
+      }
+
+      if (!row) {
+        const rows = await supabaseRequest("/rest/v1/horses", {
+          method: "POST",
+          headers: { Prefer: "return=representation" },
+          body: { id: record.id, data: record }
+        });
+        row = rows?.[0] || null;
+      }
+
       return mapHorseRow(row);
     }
 
