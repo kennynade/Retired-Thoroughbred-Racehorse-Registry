@@ -1968,6 +1968,12 @@
       record.id = editingId || crypto.randomUUID();
       if (record.g1Winner) record.gsWinner = true;
 
+      if (!record.name) {
+        alert("Horse name is required before saving.");
+        document.querySelector("#name").focus();
+        return;
+      }
+
       const missingPhotoSourceIndex = record.photos.findIndex((_, index) => !String(record.photoCredits[index] || "").trim());
       if (missingPhotoSourceIndex !== -1) {
         alert("Please enter the photographer name or source website for every uploaded photo.");
